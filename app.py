@@ -18,6 +18,21 @@ from io import BytesIO
 from dotenv import load_dotenv
 import time
 
+# For multi-monitor support on Windows
+if sys.platform.startswith('win'):
+    import ctypes
+    user32 = ctypes.windll.user32
+    
+    def get_virtual_screen_rect():
+        """Get the dimensions of the entire virtual screen (all monitors)."""
+        # SM_XVIRTUALSCREEN and SM_YVIRTUALSCREEN give the coordinates of the top-left corner
+        # SM_CXVIRTUALSCREEN and SM_CYVIRTUALSCREEN give the width and height
+        x = user32.GetSystemMetrics(76)  # SM_XVIRTUALSCREEN
+        y = user32.GetSystemMetrics(77)  # SM_YVIRTUALSCREEN
+        width = user32.GetSystemMetrics(78)  # SM_CXVIRTUALSCREEN
+        height = user32.GetSystemMetrics(79)  # SM_CYVIRTUALSCREEN
+        return (x, y, width, height)
+
 # Set up logging
 logging.basicConfig(
     filename='vision.log',
@@ -70,53 +85,95 @@ def display_image(image):
     image_label.config(image=photo)
     image_label.image = photo  # Keep a reference to prevent garbage collection
 
+# Flag to track if we're currently snipping
+is_snipping = False
+
 def capture_area():
     """Hide the main window, let the user draw a selection, then capture that region."""
-    # Hide the main window so it doesn't interfere with the snip
-    root.withdraw()
+    global is_snipping
     
-    # Delay slightly to ensure window is hidden
-    time.sleep(0.2)
+    # Prevent multiple snipping processes running simultaneously
+    if is_snipping:
+        return
+        
+    is_snipping = True
     
-    # Create a fullscreen transparent window for selection
-    selection = SelectionWindow(root)
-    root.wait_window(selection.top)
-    
-    # Show the main window again
-    root.deiconify()
-    
-    if selection.bbox:
-        try:
-            logging.info(f"Attempting to capture area: {selection.bbox}")
-            # Capture the selected region
-            img = ImageGrab.grab(bbox=selection.bbox)
-            
-            # Save a debug image if you want to see what's captured
-            img.save("debug_capture.png")
-            
-            # Display the image in the GUI
-            display_image(img)
-            # Optionally, pass it to your function that calls OpenAI
-            process_image(img)
-            
-        except Exception as e:
-            error_message = f"Error capturing image: {e}"
-            logging.error(error_message)
-            result_text.delete(1.0, tk.END)
-            result_text.insert(tk.END, error_message)
+    try:
+        # Hide the main window so it doesn't interfere with the snip
+        root.withdraw()
+        root.update()  # Force update to ensure window is hidden
+        
+        # Delay slightly to ensure window is hidden
+        time.sleep(0.3)
+        
+        # Create a fullscreen transparent window for selection
+        selection = SelectionWindow(root)
+        
+        # Wait for the selection window to be closed
+        root.wait_window(selection.top)
+        
+        # Delay to ensure proper cleanup
+        time.sleep(0.1)
+        
+        # Show the main window again
+        root.deiconify()
+        root.update()  # Force update to ensure window is shown
+        
+        if selection.bbox:
+            try:
+                logging.info(f"Attempting to capture area: {selection.bbox}")
+                # Capture the selected region
+                img = ImageGrab.grab(bbox=selection.bbox)
+                
+                # Save a debug image if you want to see what's captured
+                img.save("debug_capture.png")
+                
+                # Display the image in the GUI
+                display_image(img)
+                # Optionally, pass it to your function that calls OpenAI
+                process_image(img)
+                
+            except Exception as e:
+                error_message = f"Error capturing image: {e}"
+                logging.error(error_message)
+                result_text.delete(1.0, tk.END)
+                result_text.insert(tk.END, error_message)
+    finally:
+        # Always reset the snipping flag
+        is_snipping = False
 
 class SelectionWindow:
     """Fullscreen overlay to let the user drag a selection rectangle."""
     def __init__(self, master):
-        self.screen_width = master.winfo_screenwidth()
-        self.screen_height = master.winfo_screenheight()
+        # Get screen dimensions - use multi-monitor aware function if on Windows
+        if sys.platform.startswith('win'):
+            virtual_screen = get_virtual_screen_rect()
+            self.screen_x = virtual_screen[0]
+            self.screen_y = virtual_screen[1]
+            self.screen_width = virtual_screen[2]
+            self.screen_height = virtual_screen[3]
+            logging.info(f"Virtual screen dimensions: {virtual_screen}")
+        else:
+            self.screen_x = 0
+            self.screen_y = 0
+            self.screen_width = master.winfo_screenwidth()
+            self.screen_height = master.winfo_screenheight()
         
+        # Create the toplevel window
         self.top = tk.Toplevel(master)
-        self.top.attributes('-fullscreen', True)
+        
+        # Make sure it doesn't show in taskbar
+        self.top.wm_overrideredirect(True)
+        
+        # Set the geometry to cover the entire virtual screen
+        self.top.geometry(f"{self.screen_width}x{self.screen_height}+{self.screen_x}+{self.screen_y}")
+        
+        # Set transparency and make it fullscreen
         self.top.attributes('-alpha', 0.3)  # semi-transparent overlay
+        self.top.attributes('-topmost', True)  # Keep on top of other windows
         self.top.config(bg='gray')
         
-        # Canvas matches entire screen size
+        # Canvas matches entire screen/virtual screen size
         self.canvas = tk.Canvas(self.top, cursor="cross", bg='gray', 
                                 width=self.screen_width, height=self.screen_height)
         self.canvas.pack(fill=tk.BOTH, expand=True)
@@ -134,10 +191,17 @@ class SelectionWindow:
         self.canvas.bind("<ButtonPress-1>", self.on_button_press)
         self.canvas.bind("<B1-Motion>", self.on_move_press)
         self.canvas.bind("<ButtonRelease-1>", self.on_button_release)
+        self.canvas.bind("<Escape>", self.on_escape)
         
-        # Bring to front
+        # Also allow canceling with Escape key at the window level
+        self.top.bind("<Escape>", self.on_escape)
+        
+        # Bring to front and update
         self.top.lift()
         self.top.focus_force()
+        self.top.update()
+        
+        logging.info(f"Selection window created: {self.screen_width}x{self.screen_height}")
 
     def on_button_press(self, event):
         # Record the starting position (relative to the overlay)
@@ -158,18 +222,50 @@ class SelectionWindow:
 
     def on_button_release(self, event):
         end_x, end_y = event.x, event.y
-        left = min(self.start_x, end_x)
-        top = min(self.start_y, end_y)
-        right = max(self.start_x, end_x)
-        bottom = max(self.start_y, end_y)
+        
+        # Convert to actual screen coordinates
+        if sys.platform.startswith('win'):
+            # For multi-monitor setups, add the virtual screen offset
+            actual_left = min(self.start_x, end_x) + self.screen_x
+            actual_top = min(self.start_y, end_y) + self.screen_y
+            actual_right = max(self.start_x, end_x) + self.screen_x
+            actual_bottom = max(self.start_y, end_y) + self.screen_y
+        else:
+            # For single monitor or non-Windows
+            actual_left = min(self.start_x, end_x)
+            actual_top = min(self.start_y, end_y)
+            actual_right = max(self.start_x, end_x)
+            actual_bottom = max(self.start_y, end_y)
         
         # Ensure minimum size
-        if right - left > 5 and bottom - top > 5:
+        if actual_right - actual_left > 5 and actual_bottom - actual_top > 5:
             # Coordinates for ImageGrab
-            self.bbox = (int(left), int(top), int(right), int(bottom))
+            self.bbox = (int(actual_left), int(actual_top), int(actual_right), int(actual_bottom))
             logging.info(f"Selected area: {self.bbox}")
         
-        self.top.destroy()
+        self.cleanup()
+
+    def on_escape(self, event):
+        """Cancel the selection process."""
+        self.bbox = None
+        self.cleanup()
+        
+    def cleanup(self):
+        """Properly clean up and destroy the selection window."""
+        try:
+            # Clean up canvas items if they exist
+            if self.rect:
+                self.canvas.delete(self.rect)
+                
+            # Schedule destruction after a short delay to avoid race conditions
+            self.top.after(10, self.top.destroy)
+        except Exception as e:
+            logging.error(f"Error during selection window cleanup: {e}")
+            # Make sure the window gets destroyed no matter what
+            try:
+                self.top.destroy()
+            except:
+                pass
 
 def process_image(img):
     """Encode the image and (attempt to) call an OpenAI 'vision' model."""
@@ -178,7 +274,7 @@ def process_image(img):
         
         # "gpt-4o-mini"
         response = openai.ChatCompletion.create(
-            model="gpt-4o-mini",
+            model="gpt-4o",
             messages=[
                 {
                     "role": "user",
