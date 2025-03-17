@@ -69,6 +69,32 @@ OPENAI_API_KEY=your_api_key_here
 4. Release to capture
 5. View the AI analysis in the right panel
 
+## Building an Executable
+
+To create a standalone executable file that can be distributed without requiring Python:
+
+1. Install PyInstaller:
+   ```bash
+   pip install pyinstaller
+   ```
+
+2. Run the build script:
+   ```bash
+   python build_exe.py
+   ```
+   
+   Or use PyInstaller directly:
+   ```bash
+   pyinstaller --name=AI_Vision_Snipping --onefile --windowed --add-data=".env;." app.py
+   ```
+
+3. Find your executable in the `dist` folder
+
+### Notes about the executable:
+- The executable will include your API key from the `.env` file
+- For distribution to others, consider having users input their own API key
+- The executable is specific to the OS it was built on (Windows exe won't run on Mac/Linux)
+
 ## How It Works
 
 1. **Screen Selection**: Uses Tkinter to create a transparent overlay where you can select an area

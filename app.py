@@ -176,7 +176,7 @@ def process_image(img):
     try:
         base64_image = encode_image_to_base64(img)
         
-        # "gpt-4o-mini" 
+        # "gpt-4o-mini"
         response = openai.ChatCompletion.create(
             model="gpt-4o-mini",
             messages=[
