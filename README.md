@@ -2,8 +2,8 @@
 
 A desktop application that combines screen capture functionality with OpenAI's Vision API to analyze images and extract information from your screen.
 
-[![MasterHead](https://raw.githubusercontent.com/donejeh/PolarBearGG/main/demo-1.png)](ai-vision-snipping-tool)
-[![MasterHead](https://raw.githubusercontent.com/donejeh/PolarBearGG/main/demo-2.png)](ai-vision-snipping-tool)
+[![demo1](https://github.com/donejeh/ai-vision-snipping-tool/blob/main/demo-1.png)](ai-vision-snipping-tool)
+[![demo2](https://github.com/donejeh/ai-vision-snipping-tool/blob/main/demo-2.png)](ai-vision-snipping-tool)
 
 
 ![App Screenshot](debug_capture.png)
